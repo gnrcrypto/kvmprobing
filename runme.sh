@@ -63,8 +63,8 @@ cp kvm_prober /bin
 
 sleep 2
 echo "[*] running exploit..."
-chmod +x exploit.sh
-./exploit.sh
+#chmod +x exploit.sh
+#./exploit.sh
 
 sleep 2
 echo "[*] checking /root/addresses for flag..."

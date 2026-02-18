@@ -3,27 +3,27 @@
 echo "[*] clearing dmesg"
 dmesg -c
 
-echo "[*] disabling kaslr..."
-if grep -qw "nokaslr" /proc/cmdline; then
-    echo "[+] KASLR is DISABLED (nokaslr in cmdline)"
-else
-    echo "[!] KASLR is ENABLED - attempting to disable for next boot..."
+#echo "[*] disabling kaslr..."
+#if grep -qw "nokaslr" /proc/cmdline; then
+#    echo "[+] KASLR is DISABLED (nokaslr in cmdline)"
+#else
+#    echo "[!] KASLR is ENABLED - attempting to disable for next boot..."
     # Add nokaslr to GRUB if not already present
-    if ! grep -qw "nokaslr" /etc/default/grub; then
-         sed -i 's/^GRUB_CMDLINE_LINUX=\"/GRUB_CMDLINE_LINUX=\"nokaslr /' /etc/default/grub
-         update-grub
-        echo "[+] 'nokaslr' added to GRUB. You must reboot for KASLR to be disabled."
-        echo "[+] Reboot now? (y/N)"
-        read answer
-        if [[ "$answer" =~ ^[Yy]$ ]]; then
-             reboot
-        else
-            echo "[!] KASLR will remain enabled until you reboot."
-        fi
-    else
-        echo "[*] 'nokaslr' already in /etc/default/grub. Just reboot to disable KASLR."
-    fi
-fi
+#    if ! grep -qw "nokaslr" /etc/default/grub; then
+#         sed -i 's/^GRUB_CMDLINE_LINUX=\"/GRUB_CMDLINE_LINUX=\"nokaslr /' /etc/default/grub
+#         update-grub
+#        echo "[+] 'nokaslr' added to GRUB. You must reboot for KASLR to be disabled."
+#        echo "[+] Reboot now? (y/N)"
+#        read answer
+#        if [[ "$answer" =~ ^[Yy]$ ]]; then
+#             reboot
+#        else
+#            echo "[!] KASLR will remain enabled until you reboot."
+#        fi
+#    else
+#        echo "[*] 'nokaslr' already in /etc/default/grub. Just reboot to disable KASLR."
+#    fi
+#fi
 
 echo -e "\n\033[1;36m[*] Ensuring environment is ready...\033[0m"
 KERN_VER=$(uname -r)

@@ -1191,43 +1191,45 @@ static long driver_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
         }
 
         /* ---------- IOMMU Probe ---------- */
-    case IOCTL_IOMMU_PROBE: {
-#ifdef CONFIG_X86
-    unsigned long dmar_virt = probe_iommu_units();
-    unsigned long dmar_phys = 0;
+    static int read_physical_memory(unsigned long phys_addr, unsigned char *buffer, size_t size)
+{
+    void *virt_addr;
+    unsigned long orig_cr0 = 0;
     
-    if (dmar_virt) {
-        printk(KERN_INFO "%s: DMAR table at 0x%lx (virtual)\n", DRIVER_NAME, dmar_virt);
+    /* For RAM addresses, we can just use __va + memcpy */
+    if (phys_addr < 0x100000000UL) {  /* Below 4GB is likely RAM */
+        virt_addr = __va(phys_addr);
         
-        // Convert virtual to physical
-        struct page *page = virt_to_page(dmar_virt);
-        if (page) {
-            dmar_phys = page_to_phys(page) | (dmar_virt & ~PAGE_MASK);
-            printk(KERN_INFO "%s: DMAR table at 0x%lx (physical)\n", DRIVER_NAME, dmar_phys);
-        }
+        /* Temporarily disable WP if needed */
+        orig_cr0 = disable_wp_targeted();
         
-        if (arg && dmar_phys) {
-            unsigned char __user *user_buf = (unsigned char __user *)arg;
-            unsigned char *kernel_buf;
+        /* Direct memcpy - no ioremap needed for RAM */
+        memcpy(buffer, virt_addr, size);
+        
+        if (orig_cr0)
+            restore_wp(orig_cr0);
             
-            kernel_buf = kmalloc(4096, GFP_KERNEL);
-            if (!kernel_buf) return -ENOMEM;
-            
-            // Use physical address, not virtual!
-            read_physical_memory(dmar_phys, kernel_buf, 4096);
-            
-            if (copy_to_user(user_buf, kernel_buf, 4096)) {
-                kfree(kernel_buf);
-                return -EFAULT;
-            }
-            kfree(kernel_buf);
-        }
         return 0;
     }
-    return -ENOENT;
-#else
-    return -ENOSYS;
-#endif
+    
+    /* For device memory (MMIO), use ioremap */
+    void __iomem *mapped;
+    unsigned long offset;
+    size_t chunk_size, remaining = size, copied = 0;
+
+    while (remaining > 0) {
+        offset = phys_addr & ~PAGE_MASK;
+        chunk_size = min(remaining, (size_t)(PAGE_SIZE - offset));
+        mapped = ioremap(phys_addr & PAGE_MASK, PAGE_SIZE);
+        if (!mapped) 
+            return copied > 0 ? 0 : -EFAULT;
+        memcpy_fromio(buffer + copied, mapped + offset, chunk_size);
+        iounmap(mapped);
+        copied += chunk_size;
+        phys_addr += chunk_size;
+        remaining -= chunk_size;
+    }
+    return 0;
 }
 
         /* ---------- VAPIC Backing Page ---------- */

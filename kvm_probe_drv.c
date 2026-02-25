@@ -1191,34 +1191,44 @@ static long driver_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
         }
 
         /* ---------- IOMMU Probe ---------- */
-        case IOCTL_IOMMU_PROBE: {
+    case IOCTL_IOMMU_PROBE: {
 #ifdef CONFIG_X86
-            unsigned long dmar_addr = probe_iommu_units();
-            
-            if (dmar_addr) {
-                printk(KERN_INFO "%s: DMAR table at 0x%lx\n", DRIVER_NAME, dmar_addr);
-                
-                if (arg) {
-                    unsigned char __user *user_buf = (unsigned char __user *)arg;
-                    unsigned char *kernel_buf;
-                    
-                    kernel_buf = kmalloc(4096, GFP_KERNEL);
-                    if (!kernel_buf) return -ENOMEM;
-                    
-                    read_physical_memory(dmar_addr, kernel_buf, 4096);
-                    if (copy_to_user(user_buf, kernel_buf, 4096)) {
-                        kfree(kernel_buf);
-                        return -EFAULT;
-                    }
-                    kfree(kernel_buf);
-                }
-                return 0;
-            }
-            return -ENOENT;
-#else
-            return -ENOSYS;
-#endif
+    unsigned long dmar_virt = probe_iommu_units();
+    unsigned long dmar_phys = 0;
+    
+    if (dmar_virt) {
+        printk(KERN_INFO "%s: DMAR table at 0x%lx (virtual)\n", DRIVER_NAME, dmar_virt);
+        
+        // Convert virtual to physical
+        struct page *page = virt_to_page(dmar_virt);
+        if (page) {
+            dmar_phys = page_to_phys(page) | (dmar_virt & ~PAGE_MASK);
+            printk(KERN_INFO "%s: DMAR table at 0x%lx (physical)\n", DRIVER_NAME, dmar_phys);
         }
+        
+        if (arg && dmar_phys) {
+            unsigned char __user *user_buf = (unsigned char __user *)arg;
+            unsigned char *kernel_buf;
+            
+            kernel_buf = kmalloc(4096, GFP_KERNEL);
+            if (!kernel_buf) return -ENOMEM;
+            
+            // Use physical address, not virtual!
+            read_physical_memory(dmar_phys, kernel_buf, 4096);
+            
+            if (copy_to_user(user_buf, kernel_buf, 4096)) {
+                kfree(kernel_buf);
+                return -EFAULT;
+            }
+            kfree(kernel_buf);
+        }
+        return 0;
+    }
+    return -ENOENT;
+#else
+    return -ENOSYS;
+#endif
+}
 
         /* ---------- VAPIC Backing Page ---------- */
         case IOCTL_VAPIC_READ_PAGE: {
